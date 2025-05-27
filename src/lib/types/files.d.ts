@@ -1,5 +1,12 @@
 export interface FileListResponse {
-    path: string;
-    files: string[];
-    directories: string[];
+    filename: string;
+    file_id: string;
+    path : string;
   }
+
+
+
+export interface DeleteFileResponse {
+  message: string;
+  file_id: string;
+}
