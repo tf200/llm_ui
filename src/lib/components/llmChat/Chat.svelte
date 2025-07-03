@@ -1,4 +1,3 @@
-
 <script lang="ts">
     import { onMount } from "svelte";
     import { listFiles } from "$lib/services/files";
@@ -10,6 +9,7 @@
     import EmptyState from "./EmptyState.svelte";
     import type { ChatMessage } from "./types";
     import type { FileListResponse } from "$lib/types/files";
+    import type { SourceResult } from "$lib/services/chat";
 
     let session_id = page.url.searchParams.get("session_id");
 
@@ -22,7 +22,7 @@
 
     // Files state - now it's an array of FileListResponse
     let fileList = $state<FileListResponse[]>([]);
-    
+
     let selectedFiles = $state<string[]>([]);
 
     // Load initial files
@@ -31,7 +31,7 @@
         try {
             fileList = await listFiles();
             // Select all files by default
-            selectedFiles = fileList.map(file => file.file_id);
+            selectedFiles = fileList.map((file) => file.fileId);
         } catch (error) {
             console.error("Failed to load files:", error);
         } finally {
@@ -41,7 +41,7 @@
 
     onMount(() => {
         loadInitialFiles();
-        
+
         // Set header height CSS variable
         const header = document.querySelector("header");
         if (header) {
@@ -58,7 +58,9 @@
         }
     });
 
+    let filesUsed: Record<string, { title: string; pages: string[] }> = {};
     // Handle form submission
+
     async function handleSubmit(userInput: string) {
         if (userInput.trim() === "" || isLoading) return;
 
@@ -91,31 +93,52 @@
                 message: userInput,
             });
 
-            // Keep track of accumulated content
+            // Keep track of accumulated content and sources
             let accumulatedContent = "";
+            let sources: SourceResult[] = [];
+
+            // Helper function to update the last message
+            function updateLastMessage() {
+                messages = [
+                    ...messages.slice(0, -1),
+                    {
+                        ...initialAssistantMessage,
+                        content: accumulatedContent,
+                        sources: sources.length > 0 ? sources : undefined,
+                    },
+                ];
+            }
 
             for await (const event of sseStream) {
                 if (event.event === "message" && event.data.delta) {
-                    // Accumulate content and create new message object
+                    // Accumulate content
                     accumulatedContent += event.data.delta;
-                    
-                    messages = [
-                        ...messages.slice(0, -1),
-                        {
-                            ...initialAssistantMessage,
-                            content: accumulatedContent
-                        }
-                    ];
+                    updateLastMessage();
+                } else if (event.event === "results" && event.data.results) {
+                    // Handle sources/results
+                    sources = event.data.results;
+                    updateLastMessage();
+                }
+                // Also check if results come in a regular message event
+                else if (event.event === "message" && event.data.results) {
+                    sources = event.data.results;
+                    updateLastMessage();
+                }
+                // Handle case where message has ONLY results (no delta)
+                else if (
+                    event.event === "message" &&
+                    !event.data.delta &&
+                    event.data.results
+                ) {
+                    console.log(
+                        "Found standalone results:",
+                        event.data.results,
+                    );
+                    sources = event.data.results;
+                    updateLastMessage();
                 } else if (event.event === "error") {
                     accumulatedContent += `\n\nError: ${event.data.error || "Something went wrong"}`;
-                    
-                    messages = [
-                        ...messages.slice(0, -1),
-                        {
-                            ...initialAssistantMessage,
-                            content: accumulatedContent
-                        }
-                    ];
+                    updateLastMessage();
                 }
             }
         } catch (error) {
@@ -136,7 +159,7 @@
 
     function toggleFileSelection(file: string) {
         if (selectedFiles.includes(file)) {
-            selectedFiles = selectedFiles.filter(f => f !== file);
+            selectedFiles = selectedFiles.filter((f) => f !== file);
         } else {
             selectedFiles = [...selectedFiles, file];
         }
@@ -149,7 +172,7 @@
 
 <div class="h-full flex flex-col bg-white text-black">
     {#if messages.length === 0}
-        <EmptyState 
+        <EmptyState
             {fileList}
             {selectedFiles}
             {filesLoading}
@@ -162,7 +185,7 @@
     {:else}
         <div class="flex-1 min-h-0 flex flex-col">
             <div class="flex-1 min-h-0">
-                <ChatMessages 
+                <ChatMessages
                     {messages}
                     {isLoading}
                     {showFilePanel}
@@ -170,8 +193,8 @@
                     onToggleFilePanel={toggleFilePanel}
                 />
             </div>
-            
-            <FilePanel 
+
+            <FilePanel
                 {showFilePanel}
                 {fileList}
                 {selectedFiles}
@@ -181,7 +204,7 @@
             />
 
             <div class="flex-shrink-0">
-                <ChatInput 
+                <ChatInput
                     bind:value={input}
                     {isLoading}
                     onSubmit={handleSubmit}

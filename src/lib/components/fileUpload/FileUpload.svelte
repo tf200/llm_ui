@@ -1,22 +1,30 @@
 <script lang="ts">
+  import { fetchEventSource } from "@microsoft/fetch-event-source";
+
+  // Props
   let { onUploadSuccess, isLoading = false } = $props<{
     onUploadSuccess?: () => void;
     isLoading?: boolean;
   }>();
 
-  let uploadFiles = $state<FileList | null>(null);
+  // Component State
   let uploadFile = $state<File | null>(null);
   let dragActive = $state(false);
   let error = $state("");
   let statusMessage = $state("");
   let uploading = $state(false);
 
+  // New state for chunk-based progress tracking
+  let processedChunks = $state(0);
+  let totalChunks = $state(0);
+  let documentName = $state("");
+
   function handleFileChange(event: Event) {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files.length > 0) {
-      uploadFiles = input.files;
       uploadFile = input.files[0];
       error = "";
+      resetProgress();
     }
   }
 
@@ -34,89 +42,136 @@
     dragActive = false;
 
     if (event.dataTransfer?.files && event.dataTransfer.files.length > 0) {
-      uploadFiles = event.dataTransfer.files;
       uploadFile = event.dataTransfer.files[0];
       error = "";
+      resetProgress();
     }
   }
 
+  function resetProgress() {
+    statusMessage = "";
+    processedChunks = 0;
+    totalChunks = 0;
+    documentName = "";
+  }
+
   async function handleUpload() {
-    if (!uploadFiles || uploadFiles.length === 0) return;
+    if (!uploadFile) return;
 
     const formData = new FormData();
-    for (let i = 0; i < uploadFiles.length; i++) {
-      formData.append("files", uploadFiles[i]);
-    }
+    formData.append("file", uploadFile);
+
+    // Reset UI for new upload
+    uploading = true;
+    error = "";
+    resetProgress();
 
     try {
-      uploading = true;
-      error = "";
-      statusMessage = "";
-
-      const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/new_upload`,
+      await fetchEventSource(
+        `${import.meta.env.VITE_API_URL}/files/upload-sse`,
         {
           method: "POST",
           body: formData,
+          openWhenHidden: true,
+
+          // Handle incoming messages from the stream
+          onmessage(event) {
+            const parsedData = JSON.parse(event.data);
+
+            switch (parsedData.type) {
+              case "TOTAL_CHUNKS":
+                totalChunks = parsedData.totalChunks;
+                documentName = parsedData.documentName;
+                statusMessage = `Starting processing for ${uploadFile?.name}...`;
+                break;
+
+              case "PROGRESS":
+                processedChunks = parsedData.chunk;
+                statusMessage = `Processing chunk ${parsedData.chunk} of ${totalChunks}...`;
+                break;
+
+              case "COMPLETED":
+                statusMessage = `Embedding complete. Saving file metadata...`;
+                break;
+
+              case "DATABASE_SAVE_COMPLETED":
+                statusMessage = `Successfully uploaded and processed ${uploadFile?.name}.`;
+                console.log("Database save complete, calling onUploadSuccess");
+                onUploadSuccess?.();
+                break;
+            }
+          },
+
+          // Handle stream closure
+          onclose() {
+            console.log("SSE Connection closed by server.");
+            uploading = false;
+          },
+
+          // Handle any errors
+          onerror(err) {
+            console.error("EventSource failed:", err);
+            error =
+              "An error occurred during processing. Please check the file and try again.";
+            uploading = false;
+            throw err;
+          },
         },
       );
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        throw new Error(
-          errorData?.detail || `Upload failed with status: ${response.status}`,
-        );
-      }
-
-      const result = await response.json();
-
-      // Reset after successful upload
-      uploadFile = null;
-      uploadFiles = null;
-
-      // Show success message
-      statusMessage = `Successfully uploaded and embedded ${result.length} file(s). Total chunks processed`;
-
-      console.log(
-        "About to call onUploadSuccess, callback exists:",
-        typeof onUploadSuccess === "function",
-      );
-
-      // Notify parent component
-      onUploadSuccess?.();
     } catch (err) {
-      error = err instanceof Error ? err.message : "Upload failed";
-    } finally {
+      console.error("Caught fetchEventSource error:", err);
+      if (!error) {
+        error =
+          err instanceof Error ? err.message : "Upload failed unexpectedly.";
+      }
       uploading = false;
     }
   }
 
   function clearSelection() {
     uploadFile = null;
-    uploadFiles = null;
     error = "";
-    statusMessage = "";
+    resetProgress();
   }
 </script>
 
 <div class="w-full max-w-2xl mx-auto">
   <div class="bg-white rounded-lg border border-gray-200 p-6">
-    <h2 class="text-xl font-semibold mb-4">Upload Files</h2>
+    <h2 class="text-xl font-semibold mb-4">Upload Document</h2>
 
-    <!-- Status Messages -->
     {#if error}
       <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
         <p class="text-sm text-red-700">{error}</p>
       </div>
     {/if}
 
-    {#if statusMessage}
-      <div class="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-        <p class="text-sm text-green-700">{statusMessage}</p>
+    {#if statusMessage && !error}
+      <div class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+        <p class="text-sm text-blue-700">{statusMessage}</p>
       </div>
     {/if}
 
-    <!-- Upload Area -->
+    {#if uploading && totalChunks > 0}
+      <div class="mb-4">
+        <div class="flex justify-between mb-1">
+          <span class="text-sm font-medium text-gray-700"
+            >Processing Chunks</span
+          >
+          <span class="text-sm font-medium text-gray-700"
+            >{processedChunks} / {totalChunks}</span
+          >
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-2.5">
+          <div
+            class="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+            style="width: {totalChunks > 0
+              ? (processedChunks / totalChunks) * 100
+              : 0}%"
+          ></div>
+        </div>
+      </div>
+    {/if}
+
     <div
       class="border-2 border-dashed rounded-lg p-8 text-center transition-colors {dragActive
         ? 'border-blue-400 bg-blue-50'
@@ -150,17 +205,10 @@
             <div class="text-left">
               <p class="font-medium text-gray-900">{uploadFile.name}</p>
               <p class="text-sm text-gray-500">
-                {(uploadFile.size / 1024).toFixed(2)} KB • {uploadFile.type ||
-                  "Unknown type"}
+                {(uploadFile.size / 1024).toFixed(2)} KB
               </p>
             </div>
           </div>
-
-          {#if uploadFiles && uploadFiles.length > 1}
-            <p class="text-sm text-gray-600">
-              +{uploadFiles.length - 1} more file(s) selected
-            </p>
-          {/if}
 
           <div class="flex justify-center space-x-3">
             <button
@@ -189,11 +237,9 @@
                     d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                   ></path>
                 </svg>
-                Uploading...
+                Processing...
               {:else}
-                Upload {uploadFiles && uploadFiles.length > 1
-                  ? `${uploadFiles.length} Files`
-                  : "File"}
+                Upload File
               {/if}
             </button>
             <button
@@ -226,16 +272,16 @@
             </svg>
             <div>
               <p class="text-lg font-medium text-gray-700 mb-1">
-                Drag and drop your files here
+                Drag and drop your file here
               </p>
-              <p class="text-sm text-gray-500">or click to browse files</p>
+              <p class="text-sm text-gray-500">or click to browse</p>
             </div>
           </div>
           <input
             type="file"
-            multiple
             class="hidden"
             onchange={handleFileChange}
+            accept=".pdf,.doc,.docx,.xls,.xlsx,.txt"
             disabled={uploading || isLoading}
           />
         </label>

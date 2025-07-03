@@ -11,15 +11,29 @@ export interface SendMessageRequest {
 
 }
 
+export interface SourceResult {
+    title: string;
+    pages: string;
+    fileId: string;
+}
+
+export interface ChatMessage {
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    timestamp?: string;
+    sources?: SourceResult[]; // Add sources to the message type
+}
+
 export interface SSEEventData {
     delta?: string;
     message_id: string;
     chat_id: string;
     error?: string;
+    results?: SourceResult[]; // Add results to SSE data
 }
 
 export interface SSEMessage {
-    event: 'message' | 'done' | 'error';
+    event: 'message' | 'done' | 'error' | 'results'; // Add results event type
     data: SSEEventData;
 }
 
@@ -30,15 +44,12 @@ export interface SSEMessage {
  * @returns Async generator yielding SSEMessage events.
  */
 export async function* sendMessageSSE(messageData: SendMessageRequest): AsyncGenerator<SSEMessage> {
-    // Get auth header
-
     const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/chat/send`,
+        `${import.meta.env.VITE_API_URL}/chat/message`,
         {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                // Setting Accept to event-stream can help signal the response type
                 'Accept': 'text/event-stream'
             },
             body: JSON.stringify(messageData)
@@ -49,7 +60,6 @@ export async function* sendMessageSSE(messageData: SendMessageRequest): AsyncGen
         throw new Error('Failed to send message');
     }
 
-    // Process the SSE stream using the ReadableStream API
     const reader = response.body?.getReader();
     if (!reader) {
         throw new Error('No readable stream in response');
@@ -62,34 +72,43 @@ export async function* sendMessageSSE(messageData: SendMessageRequest): AsyncGen
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
 
-        // SSE messages are separated by newlines
         const lines = buffer.split('\n');
-        // Process all complete lines except the last (which may be incomplete)
         for (let i = 0; i < lines.length - 1; i++) {
             const line = lines[i].trim();
             if (!line) continue;
-            // Expecting lines in the format: "event: <eventName>" or "data: <json>"
+
             if (line.startsWith('data:')) {
                 const jsonStr = line.slice(5).trim();
+                console.log("Raw SSE data:", jsonStr); // Debug log
+
                 try {
                     const data: SSEEventData = JSON.parse(jsonStr);
-                    // Determine the event type (could be part of the JSON data or deduced externally)
-                    // In our backend, we yield separate events for "message", "done", and "error"
-                    // so you might want to use additional logic to deduce the type if needed.
-                    // For simplicity, here we assume the backend includes the event type as a property.
-                    // Otherwise, you can modify the protocol to send an "event:" line before "data:".
-                    // Here we simply return the data as a "message" event unless an error is present.
-                    const eventType: SSEMessage['event'] = data.error ? 'error' : 'message';
+                    console.log("Parsed SSE data:", data); // Debug log
+
+                    // Determine event type based on data content
+                    let eventType: SSEMessage['event'] = 'message';
+
+                    if (data.error) {
+                        eventType = 'error';
+                    } else if (data.results) {
+                        eventType = 'results';
+                        console.log("Setting event type to results"); // Debug log
+                    } else if (data.delta) {
+                        eventType = 'message';
+                    }
+
+                    console.log("Event type:", eventType); // Debug log
+
                     yield {
                         event: eventType,
                         data: data
                     };
                 } catch (e) {
                     console.error('Failed to parse SSE data', e);
+                    console.error('Raw data was:', jsonStr);
                 }
             }
         }
-        // Keep the last partial line in the buffer
         buffer = lines[lines.length - 1];
     }
 }

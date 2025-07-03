@@ -1,8 +1,10 @@
 export interface FileListResponse {
-    filename: string;
-    file_id: string;
-    path : string;
-  }
+  filename: string;
+  fileId: string;
+  path: string;
+  uploadedAt: string;
+
+}
 
 
 
