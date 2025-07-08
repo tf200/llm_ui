@@ -41,7 +41,7 @@ ENV HOST=0.0.0.0
 ENV PORT=3000
 # Note: VITE_API_URL is NOT needed here, it's already baked into the JS bundle
 
-RUN addgroup -S appgroup && adduser -S appuser -G appgroupa
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 USER appuser
 
 EXPOSE 3000
