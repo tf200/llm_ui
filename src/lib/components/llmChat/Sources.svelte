@@ -1,5 +1,6 @@
 <script lang="ts">
     import type { SourceResult } from "$lib/services/chat";
+    import { openFile } from "$lib/services/files";
 
     let { sources } = $props<{
         sources: SourceResult[];
@@ -62,6 +63,17 @@
             )
             .trim();
     }
+
+    // Handle file click
+    async function handleFileClick(fileId: string, event: MouseEvent) {
+        event.preventDefault();
+        try {
+            await openFile(fileId);
+        } catch (error) {
+            console.error("Error opening file:", error);
+            // Optionally show user-friendly error message
+        }
+    }
 </script>
 
 <div class="mt-3">
@@ -90,8 +102,15 @@
             <div class="px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
                 <div class="flex items-start justify-between">
                     <div class="flex-1 min-w-0">
-                        <div class="text-xs font-medium text-gray-800 truncate">
-                            {cleanTitle(source.title)}
+                        <div class="text-xs font-medium text-gray-800">
+                            <button
+                                class="text-left truncate hover:text-blue-600 hover:underline transition-colors duration-200 focus:outline-none focus:text-blue-600 focus:underline"
+                                onclick={(e) =>
+                                    handleFileClick(source.fileId, e)}
+                                title="Click to open PDF in new tab"
+                            >
+                                {cleanTitle(source.title)}
+                            </button>
                         </div>
                         <div class="flex items-center mt-1 space-x-1">
                             <span class="text-xs text-gray-500">Pages:</span>

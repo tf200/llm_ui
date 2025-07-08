@@ -54,3 +54,42 @@ export async function deleteFile(file_id: string): Promise<DeleteFileResponse> {
     throw new Error('File deleting failed due to an unknown error');
   }
 }
+
+
+
+export async function openFile(file_id: string): Promise<void> {
+  try {
+    const response = await fetch(
+      `${import.meta.env.VITE_API_URL}/files/${file_id}`,
+      {
+        method: 'GET',
+        // headers: headers, // Uncomment if you need auth headers
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch file: ${response.status} ${response.statusText}`);
+    }
+
+    // Get the blob and create object URL
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+
+    // Open in new tab
+    window.open(url, '_blank');
+
+    // Clean up object URL after a short delay to ensure it loads
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+  } catch (error) {
+    console.error('Error opening file:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get file URL for direct linking
+ */
+export function getFileUrl(file_id: string): string {
+  return `${import.meta.env.VITE_API_URL}/files/${file_id}`;
+}
